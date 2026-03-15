@@ -67,57 +67,76 @@ def get_verifik_data(cedula):
 
 def get_pnp_data(cedula):
     normalized = normalize_cedula(cedula)
+    print(f"\n[DEBUG] Iniciando proceso para: {normalized}")
     
     with sync_playwright() as p:
-        # Lanzamos el navegador (headless=True por defecto)
-        browser = p.chromium.launch(headless=True)
+        # 1. Modo VISIBLE para inspección manual
+        browser = p.chromium.launch(headless=False, args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox"
+        ])
+        
         context = browser.new_context(
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
         )
         page = context.new_page()
         
         try:
-            # Ir a la página
-            page.goto(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}", wait_until="networkidle")
-            
-            # 1. Extraer el captcha
+            print(f"[DEBUG] Navegando a {PNP_BASE_URL}...")
+            # Usamos 'commit' para que apenas el servidor responda, sigamos adelante
+            page.goto(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}", wait_until="domcontentloaded", timeout=60000)
+            print("[DEBUG] Página base cargada.")
+
+            # 2. Esperar al input de la cédula
+            page.wait_for_selector(f'input[name="{PNP_FORM_CEDULA_FIELD}"]', timeout=15000)
+            print("[DEBUG] Formulario detectado.")
+
+            # 3. Resolver Captcha con log de texto
             body_text = page.inner_text("body")
             captcha_match = re.search(PNP_CAPTCHA_PATTERN, body_text)
             
             if not captcha_match:
-                return {"cedula": normalized, "status": "Captcha no hallado"}
+                print("[ERROR] No se pudo encontrar el patrón del captcha en el texto de la página.")
+                return {"cedula": normalized, "status": "Error: Captcha no encontrado"}
             
-            solution = solve_pnp_captcha(captcha_match.group(1))
-            print(f"Captcha resuelto: {solution}")
+            question = captcha_match.group(1)
+            solution = solve_pnp_captcha(question)
+            print(f"[DEBUG] Pregunta: '{question}' -> Solución: {solution}")
 
-            # 2. Llenar formulario
-            page.fill(f'input[name="{PNP_FORM_CEDULA_FIELD}"]', normalized)
-            page.fill(f'input[name="{PNP_FORM_CAPTCHA_FIELD}"]', solution)
-            
-            # 3. Click y esperar navegación/carga
-            # Usamos el selector del botón que ya tenías
+            # 4. Simulación de escritura humana
+            page.type(f'input[name="{PNP_FORM_CEDULA_FIELD}"]', normalized, delay=150)
+            page.type(f'input[name="{PNP_FORM_CAPTCHA_FIELD}"]', solution, delay=150)
+            print("[DEBUG] Campos completados. Haciendo clic en enviar...")
+
+            # 5. Click y monitoreo de respuesta
             page.click("button.btn-primary, button[type='submit']")
             
-            # Esperamos un momento a que el contenido cambie
-            page.wait_for_timeout(3000) 
+            # Esperamos a que aparezca algún cambio en el DOM (alerta o resultado)
+            print("[DEBUG] Esperando resultados del servidor...")
+            page.wait_for_selector("div.alert, div.card-body, table, .container", timeout=20000)
             
-            # 4. Extraer datos con el selector que ya conoces
-            # Playwright permite usar selectores CSS directamente
+            # Capturamos el contenido
             content = page.locator("body > div:nth-of-type(1) > div:nth-of-type(1)").first
+            raw_result = content.inner_text().strip()
             
-            if content.is_visible():
-                data_text = content.inner_text()
-                return {
-                    "cedula": normalized, 
-                    "fuente": "Sistemas PNP", 
-                    "datos": data_text.strip()
-                }
-            
-            return {"cedula": normalized, "status": "No se encontraron resultados"}
+            print(f"[SUCCESS] Datos extraídos para {normalized}")
+            return {
+                "cedula": normalized, 
+                "fuente": "Sistemas PNP", 
+                "datos_tarjeta": raw_result
+            }
 
         except Exception as e:
-            return {"cedula": normalized, "status": f"Error: {str(e)[:50]}"}
+            # En caso de error, guardamos una imagen de lo que veía el bot
+            error_img = f"error_{normalized}.png"
+            page.screenshot(path=error_img)
+            print(f"[ERROR] Falló {normalized}. Captura guardada como {error_img}")
+            print(f"[DETALLE] {str(e)}")
+            return {"cedula": normalized, "status": f"Error: {type(e).__name__}"}
+            
         finally:
+            # Dejamos el navegador abierto 2 segundos para que alcances a ver qué pasó
+            page.wait_for_timeout(2000)
             browser.close()
 
 # --- Main ---
