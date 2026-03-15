@@ -67,88 +67,56 @@ def get_verifik_data(cedula):
 
 def get_pnp_data(cedula):
     normalized = normalize_cedula(cedula)
-    # Limpiamos la cédula para que sea solo números si el sitio así lo requiere
-    # según el placeholder "Solo números" de tu captura
-    cedula_numerica = re.sub(r'\D', '', normalized)
-    
-    print(f"\n[DEBUG] Iniciando proceso para: {normalized}")
+    # Extraemos solo los números, ya que la captura dice "* Solo números"
+    cedula_numerica = "".join(filter(str.isdigit, normalized))
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False) # Mantenlo visible para validar
-        context = browser.new_context(viewport={'width': 1280, 'height': 720})
-        page = context.new_page()
+        browser = p.chromium.launch(headless=False) # Verás la ventana para debug
+        page = browser.new_page()
         
         try:
-            print(f"[DEBUG] Navegando a {PNP_BASE_URL}...")
             page.goto(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}", wait_until="load")
-            
-            # --- NUEVA LÓGICA DE IFRAMES ---
-            print("[DEBUG] Buscando el marco del formulario...")
-            # Esperamos un poco a que los iframes carguen
-            page.wait_for_timeout(3000)
-            
-            # Intentamos encontrar el frame que contiene el input 'txtCedula'
-            frame = None
-            for f in page.frames:
-                if "cedula" in f.url or f.name == "frame_nombre_aqui": # Ajustar si conocemos el nombre
-                    frame = f
+            page.wait_for_timeout(3000) # Tiempo para que cargue el iframe
+
+            # BUSCAR EL MARCO CORRECTO
+            target_frame = None
+            for frame in page.frames:
+                # Intentamos detectar el marco que contenga ALGÚN input
+                if frame.locator("input").count() > 0:
+                    target_frame = frame
                     break
             
-            # Si no lo encontramos por URL/Nombre, usamos el que tenga el input
-            if not frame:
-                for f in page.frames:
-                    try:
-                        if f.locator(f'input[name="{PNP_FORM_CEDULA_FIELD}"]').count() > 0:
-                            frame = f
-                            print(f"[DEBUG] Frame encontrado por contenido: {f.url}")
-                            break
-                    except: continue
+            if not target_frame:
+                print("No se encontró el marco del formulario.")
+                return {"cedula": normalized, "status": "No se encontró el marco del formulario."}
 
-            if not frame:
-                # Si falla lo anterior, trabajamos sobre la página principal (por si no era iframe)
-                frame = page
-                print("[WARN] No se detectó iframe, usando página principal.")
-
-            # --- INTERACCIÓN CON EL FRAME ---
-            input_cedula = frame.locator(f'input[name="{PNP_FORM_CEDULA_FIELD}"]')
-            input_cedula.wait_for(state="visible", timeout=10000)
+            # INTERACTUAR DENTRO DEL MARCO
+            # Usamos selectores más genéricos por si 'txtCedula' no es exacto
+            input_selector = 'input[name*="Cedula"], input[placeholder*="cédula"]'
+            target_frame.wait_for_selector(input_selector, timeout=10000)
             
-            # Resolver Captcha
-            body_text = frame.inner_text("body")
-            captcha_match = re.search(PNP_CAPTCHA_PATTERN, body_text)
+            # Resolver Captcha y llenar
+            content = target_frame.content()
+            match = re.search(PNP_CAPTCHA_PATTERN, content)
+            if not match:
+                return {"cedula": normalized, "status": "Captcha no encontrado"}
             
-            if not captcha_match:
-                return {"cedula": normalized, "status": "Captcha no hallado en frame"}
+            sol = solve_pnp_captcha(match.group(1))
+            target_frame.fill(input_selector, cedula_numerica)
+            target_frame.fill('input[name*="Captcha"]', sol)
+            target_frame.click("button[type='submit'], button:has-text('Buscar')")
             
-            question = captcha_match.group(1)
-            solution = solve_pnp_captcha(question)
-            print(f"[DEBUG] Pregunta: {question} -> Solución: {solution}")
-
-            # Llenar datos
-            input_cedula.fill(cedula_numerica) # Usamos solo números según tu captura
-            frame.fill(f'input[name="{PNP_FORM_CAPTCHA_FIELD}"]', solution)
-            
-            print("[DEBUG] Enviando formulario...")
-            frame.click("button:has-text('Buscar'), button[type='submit']")
-            
-            # Esperar resultado dentro del frame
             page.wait_for_timeout(5000)
             
-            # Extraer resultado (ajustar selector si es necesario)
-            # Usamos evaluate para obtener el HTML del frame
-            soup = BeautifulSoup(frame.evaluate("document.documentElement.outerHTML"), 'html.parser')
-            # Buscamos el texto que aparezca después del click
-            results = frame.locator("div.alert, .card-body").first
-            
+            # Extraer resultado
+            results = target_frame.locator("div.alert, .card-body").first
             if results.is_visible():
                 return {"cedula": normalized, "fuente": "Sistemas PNP", "datos": results.inner_text().strip()}
             
             return {"cedula": normalized, "status": "Consulta realizada, sin datos visibles"}
-
+            
         except Exception as e:
-            page.screenshot(path=f"debug_frame_{normalized}.png")
-            print(f"[ERROR] {str(e)}")
-            return {"cedula": normalized, "status": f"Error de Frame"}
+            return {"cedula": normalized, "status": f"Error: {str(e)}"}
         finally:
             browser.close()
 
