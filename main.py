@@ -22,7 +22,6 @@ PNP_GET_CAPTCHA_URL_PATH = "/cedula/"
 PNP_CAPTCHA_PATTERN = r'(¿Cuánto es \d+\s*[+\-*/]\s*\d+\?)'
 PNP_FORM_CEDULA_FIELD = "txtCedula"
 PNP_FORM_CAPTCHA_FIELD = "txtCaptcha"
-PNP_FORM_BUTTON_XPATH = "/html/body/div[1]/div/div/div/form/div[4]/button"
 
 # --- Helpers ---
 
@@ -72,58 +71,65 @@ def get_verifik_data(cedula):
 
 def get_pnp_data(cedula):
     normalized = normalize_cedula(cedula)
+    print(f"Processing {normalized}...")
 
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox") # Crucial para Linux/Fedora
-    chrome_options.add_argument("--disable-dev-shm-usage") # Evita errores de memoria compartida
-    # Agregamos un User-Agent real para evitar bloqueos
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 5) # Aumentamos el margen de espera
+    wait = WebDriverWait(driver, 10)
 
     try:
         driver.get(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}")
-
-        # Esperar a que el cuerpo de la página cargue para buscar el captcha
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
-        # Extraer el texto completo para el regex
         page_content = driver.find_element(By.TAG_NAME, "body").text
         captcha_match = re.search(PNP_CAPTCHA_PATTERN, page_content)
 
         if not captcha_match:
-            return {"cedula": normalized, "fuente": "Sistemas PNP", "status": "Captcha no visible"}
+            print("Captcha not found on page.")
+            return {"cedula": normalized, "fuente": "Sistemas PNP", "status": "Captcha not found"}
 
         solution = solve_pnp_captcha(captcha_match.group(1))
+        print(f"Captcha solved: {solution}")
 
-        # Interactuar con los campos
+        # Fill form
         wait.until(EC.visibility_of_element_located((By.NAME, PNP_FORM_CEDULA_FIELD))).send_keys(normalized)
         driver.find_element(By.NAME, PNP_FORM_CAPTCHA_FIELD).send_keys(solution)
 
-        # Click en el botón usando un selector más genérico pero seguro
-        submit_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.btn-primary, button[type='submit']")))
+        # Click button
+        submit_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[type='submit'], .btn-primary")))
         submit_btn.click()
+        print("Form submitted.")
 
-        # Espera intencional corta para que el DOM se actualice tras el click
-        time.sleep(3)
-
-        # Analizar resultados con BeautifulSoup
+        # Wait for results - looking for specific result indicators
+        # Adjust these selectors if the site structure is different
+        time.sleep(4) 
+        
         soup = BeautifulSoup(driver.page_source, 'html.parser')
-        # Buscamos cualquier contenedor que tenga texto relevante
-        target = soup.select_one("div.alert-success, div.card-body, .container")
+        
+        # Try to find specific result containers, avoiding the main layout container
+        target = soup.select_one("div.alert-success, div.card, table")
 
-        if target and len(target.get_text(strip=True)) > 3: # Validamos que traiga algo real
+        if target:
+            text_result = target.get_text(strip=True, separator=' ')
+            print("Data found.")
             return {
                 "cedula": normalized,
                 "fuente": "Sistemas PNP",
-                "datos_tarjeta": target.get_text(strip=True, separator=' ')
+                "datos_tarjeta": text_result
             }
 
-        return {"cedula": normalized, "fuente": "Sistemas PNP", "status": "No se encontraron datos"}
+        print("No data found in expected containers.")
+        return {"cedula": normalized, "fuente": "Sistemas PNP", "status": "No data found"}
 
     except Exception as e:
+        print(f"Error processing {normalized}: {str(e)}")
         return {"cedula": normalized, "fuente": "Sistemas PNP", "status": f"Error: {str(e)[:50]}"}
     finally:
         driver.quit()
