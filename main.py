@@ -5,11 +5,8 @@ import re
 import sys
 import time
 import urllib3
-import undetected_chromedriver as uc
+from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 # --- Configuration ---
 VERIFIK_API_KEY = os.environ.get("VERIFIK_API_KEY", "YOUR_VERIFIK_API_KEY_HERE")
@@ -71,57 +68,57 @@ def get_verifik_data(cedula):
 def get_pnp_data(cedula):
     normalized = normalize_cedula(cedula)
     
-    options = uc.ChromeOptions()
-    options.add_argument("--headless") # Modo invisible
-    options.add_argument("--no-sandbox") 
-    options.add_argument("--disable-dev-shm-usage")
-    
-    # undetected-chromedriver se encarga de descargar el driver correcto solo
-    driver = uc.Chrome(options=options)
-    wait = WebDriverWait(driver, 20)
-    
-    try:
-        driver.get(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}")
+    with sync_playwright() as p:
+        # Lanzamos el navegador (headless=True por defecto)
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
         
-        # Extraer captcha del body text (más seguro que page_source)
-        body_text = wait.until(EC.presence_of_element_located((By.TAG_NAME, "body"))).text
-        captcha_match = re.search(PNP_CAPTCHA_PATTERN, body_text)
-        
-        if not captcha_match:
-            return {"cedula": normalized, "status": "Captcha no encontrado"}
+        try:
+            # Ir a la página
+            page.goto(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}", wait_until="networkidle")
             
-        solution = solve_pnp_captcha(captcha_match.group(1))
-        print(f"Captcha solved: {solution}") # Debug
-        
-        # Llenar campos
-        driver.find_element(By.NAME, PNP_FORM_CEDULA_FIELD).send_keys(normalized)
-        driver.find_element(By.NAME, PNP_FORM_CAPTCHA_FIELD).send_keys(solution)
-        
-        # Click en el botón de envío
-        submit_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[type='submit']")))
-        submit_btn.click()
-        
-        # Esperar a que el resultado cargue (ajustar selector según la web)
-        time.sleep(5) 
-        
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        # Buscamos el div que mencionaste en tu código original
-        target = soup.select_one("body > div:nth-of-type(1) > div:nth-of-type(1)")
-        
-        if target:
-            return {
-                "cedula": normalized, 
-                "fuente": "Sistemas PNP", 
-                "datos": target.get_text(strip=True, separator=' ')
-            }
-        
-        return {"cedula": normalized, "status": "No se encontraron datos"}
-        
-    except Exception as e:
-        # Esto capturará el error y evitará que el script se detenga
-        return {"cedula": normalized, "status": f"Error: {type(e).__name__}"}
-    finally:
-        driver.quit()
+            # 1. Extraer el captcha
+            body_text = page.inner_text("body")
+            captcha_match = re.search(PNP_CAPTCHA_PATTERN, body_text)
+            
+            if not captcha_match:
+                return {"cedula": normalized, "status": "Captcha no hallado"}
+            
+            solution = solve_pnp_captcha(captcha_match.group(1))
+            print(f"Captcha resuelto: {solution}")
+
+            # 2. Llenar formulario
+            page.fill(f'input[name="{PNP_FORM_CEDULA_FIELD}"]', normalized)
+            page.fill(f'input[name="{PNP_FORM_CAPTCHA_FIELD}"]', solution)
+            
+            # 3. Click y esperar navegación/carga
+            # Usamos el selector del botón que ya tenías
+            page.click("button.btn-primary, button[type='submit']")
+            
+            # Esperamos un momento a que el contenido cambie
+            page.wait_for_timeout(3000) 
+            
+            # 4. Extraer datos con el selector que ya conoces
+            # Playwright permite usar selectores CSS directamente
+            content = page.locator("body > div:nth-of-type(1) > div:nth-of-type(1)").first
+            
+            if content.is_visible():
+                data_text = content.inner_text()
+                return {
+                    "cedula": normalized, 
+                    "fuente": "Sistemas PNP", 
+                    "datos": data_text.strip()
+                }
+            
+            return {"cedula": normalized, "status": "No se encontraron resultados"}
+
+        except Exception as e:
+            return {"cedula": normalized, "status": f"Error: {str(e)[:50]}"}
+        finally:
+            browser.close()
 
 # --- Main ---
 
