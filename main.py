@@ -5,10 +5,9 @@ import re
 import sys
 import time
 import urllib3
+import undetected_chromedriver as uc
 from bs4 import BeautifulSoup
-from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -71,66 +70,56 @@ def get_verifik_data(cedula):
 
 def get_pnp_data(cedula):
     normalized = normalize_cedula(cedula)
-    print(f"Processing {normalized}...")
-
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-
-    driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 10)
-
+    
+    options = uc.ChromeOptions()
+    options.add_argument("--headless") # Modo invisible
+    options.add_argument("--no-sandbox") 
+    options.add_argument("--disable-dev-shm-usage")
+    
+    # undetected-chromedriver se encarga de descargar el driver correcto solo
+    driver = uc.Chrome(options=options)
+    wait = WebDriverWait(driver, 20)
+    
     try:
         driver.get(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}")
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-
-        page_content = driver.find_element(By.TAG_NAME, "body").text
-        captcha_match = re.search(PNP_CAPTCHA_PATTERN, page_content)
-
+        
+        # Extraer captcha del body text (más seguro que page_source)
+        body_text = wait.until(EC.presence_of_element_located((By.TAG_NAME, "body"))).text
+        captcha_match = re.search(PNP_CAPTCHA_PATTERN, body_text)
+        
         if not captcha_match:
-            print("Captcha not found on page.")
-            return {"cedula": normalized, "fuente": "Sistemas PNP", "status": "Captcha not found"}
-
+            return {"cedula": normalized, "status": "Captcha no encontrado"}
+            
         solution = solve_pnp_captcha(captcha_match.group(1))
-        print(f"Captcha solved: {solution}")
-
-        # Fill form
-        wait.until(EC.visibility_of_element_located((By.NAME, PNP_FORM_CEDULA_FIELD))).send_keys(normalized)
+        print(f"Captcha solved: {solution}") # Debug
+        
+        # Llenar campos
+        driver.find_element(By.NAME, PNP_FORM_CEDULA_FIELD).send_keys(normalized)
         driver.find_element(By.NAME, PNP_FORM_CAPTCHA_FIELD).send_keys(solution)
-
-        # Click button
-        submit_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[type='submit'], .btn-primary")))
+        
+        # Click en el botón de envío
+        submit_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[type='submit']")))
         submit_btn.click()
-        print("Form submitted.")
-
-        # Wait for results - looking for specific result indicators
-        # Adjust these selectors if the site structure is different
-        time.sleep(4) 
+        
+        # Esperar a que el resultado cargue (ajustar selector según la web)
+        time.sleep(5) 
         
         soup = BeautifulSoup(driver.page_source, 'html.parser')
+        # Buscamos el div que mencionaste en tu código original
+        target = soup.select_one("body > div:nth-of-type(1) > div:nth-of-type(1)")
         
-        # Try to find specific result containers, avoiding the main layout container
-        target = soup.select_one("div.alert-success, div.card, table")
-
         if target:
-            text_result = target.get_text(strip=True, separator=' ')
-            print("Data found.")
             return {
-                "cedula": normalized,
-                "fuente": "Sistemas PNP",
-                "datos_tarjeta": text_result
+                "cedula": normalized, 
+                "fuente": "Sistemas PNP", 
+                "datos": target.get_text(strip=True, separator=' ')
             }
-
-        print("No data found in expected containers.")
-        return {"cedula": normalized, "fuente": "Sistemas PNP", "status": "No data found"}
-
+        
+        return {"cedula": normalized, "status": "No se encontraron datos"}
+        
     except Exception as e:
-        print(f"Error processing {normalized}: {str(e)}")
-        return {"cedula": normalized, "fuente": "Sistemas PNP", "status": f"Error: {str(e)[:50]}"}
+        # Esto capturará el error y evitará que el script se detenga
+        return {"cedula": normalized, "status": f"Error: {type(e).__name__}"}
     finally:
         driver.quit()
 
