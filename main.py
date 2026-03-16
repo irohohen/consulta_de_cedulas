@@ -2,10 +2,12 @@ import csv
 import os
 import re
 import time
+import json
 from playwright.sync_api import sync_playwright
 
 # --- Configuration ---
 OUTPUT_CSV_FILE = "cedula_data.csv"
+OUTPUT_JSON_FILE = "cedula_data.json"
 PNP_BASE_URL = "https://www.sistemaspnp.com"
 PNP_GET_CAPTCHA_URL_PATH = "/cedula/"
 PNP_CAPTCHA_PATTERN = r'(¿Cuánto es \d+\s*[+\-*/]\s*\d+\?)'
@@ -51,7 +53,12 @@ def save_to_csv(data_list, filename):
                 "nombre y apellidos": item.get("nombre y apellidos", ""),
                 "cedula": item.get("cedula", "")
             })
-    print(f"Data saved to '{filename}'")
+    print(f"CSV saved to '{filename}'")
+
+def save_to_json(data_list, filename):
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data_list, f, indent=4, ensure_ascii=False)
+    print(f"JSON saved to '{filename}'")
 
 def solve_pnp_captcha(question):
     match = re.search(r'(\d+)\s*([+\-*/])\s*(\d+)', question)
@@ -143,11 +150,13 @@ if __name__ == "__main__":
     for c in cedulas:
         print(f"Processing: {c}")
         start_id = time.time()
-        results.append(get_pnp_data(c))
+        res = get_pnp_data(c)
+        results.append(res)
         end_id = time.time()
-        print(f"Finished {c} in {end_id - start_id:.2f} seconds")
+        print(f"Result for {c}: {res.get('status')} (Time: {end_id - start_id:.2f}s)")
     
     end_total = time.time()
     print(f"Total time: {end_total - start_total:.2f} seconds")
 
     save_to_csv(results, OUTPUT_CSV_FILE)
+    save_to_json(results, OUTPUT_JSON_FILE)
