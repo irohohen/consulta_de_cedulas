@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+import time
 from playwright.sync_api import sync_playwright
 
 # --- Configuration ---
@@ -138,8 +139,15 @@ if __name__ == "__main__":
         except Exception as e: print(f"File error: {e}")
 
     results = []
+    start_total = time.time()
     for c in cedulas:
         print(f"Processing: {c}")
+        start_id = time.time()
         results.append(get_pnp_data(c))
+        end_id = time.time()
+        print(f"Finished {c} in {end_id - start_id:.2f} seconds")
+    
+    end_total = time.time()
+    print(f"Total time: {end_total - start_total:.2f} seconds")
 
     save_to_csv(results, OUTPUT_CSV_FILE)
