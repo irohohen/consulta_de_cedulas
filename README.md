@@ -73,10 +73,10 @@ En Windows (PowerShell):
 
 ### 4. Instalar Dependencias
 
-Con el entorno virtual activado, instale todas las dependencias listadas en `pyproject.toml` y `uv.lock` usando `uv`:
+Con el entorno virtual activado, instale todas las dependencias usando `uv`:
 
 ```bash
-uv pip install
+uv pip install -r requirements.txt
 ```
 
 ### 5. Ejecutar el Programa
