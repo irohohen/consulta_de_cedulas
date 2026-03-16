@@ -67,93 +67,100 @@ def get_verifik_data(cedula):
 
 def get_pnp_data(cedula):
     normalized = normalize_cedula(cedula)
+    # Según tu captura, el sitio pide solo números
     cedula_numerica = "".join(filter(str.isdigit, normalized))
     
-    print(f"\n[START] Procesando cédula: {normalized}")
+    print(f"\n[DEBUG] >>> INICIANDO CONSULTA: {normalized} <<<")
     
     with sync_playwright() as p:
-        # Mantenemos visible para inspección en Fedora
         browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
+        context = browser.new_context()
+        page = context.new_page()
         
         try:
-            print(f"[1/5] Navegando a: {PNP_BASE_URL}...")
+            print(f"[DEBUG] [1/5] Navegando a {PNP_BASE_URL}...")
             page.goto(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}", wait_until="load", timeout=60000)
             
-            # Espera para carga de scripts e iframes
-            page.wait_for_timeout(5000)
+            # Espera para que los marcos de publicidad no interfieran con la carga del form
+            page.wait_for_timeout(4000)
             
-            # Localización del Frame
+            # Localización del frame correcto
             target_frame = None
-            print(f"[2/5] Buscando marco del formulario entre {len(page.frames)} marcos...")
-            for f in page.frames:
-                if f.locator('input[name="txtCedula"]').count() > 0:
-                    target_frame = f
-                    break
+            print(f"[DEBUG] [2/5] Buscando marco del formulario...")
             
+            for i, f in enumerate(page.frames):
+                try:
+                    # Buscamos el frame que contiene el ID 'form' que vimos en tu captura
+                    if f.locator("#form").count() > 0:
+                        target_frame = f
+                        print(f"[DEBUG] Formulario detectado en Frame index: {i}")
+                        break
+                except: continue
+
             if not target_frame:
-                print("[ERROR] No se localizó el frame que contiene 'txtCedula'.")
-                return {"cedula": normalized, "status": "Error: Frame no hallado"}
+                print("[ERROR] No se pudo localizar el marco con el formulario.")
+                return {"cedula": normalized, "status": "Error: Marco no encontrado"}
 
-            print(f"[DEBUG] Frame identificado: {target_frame.url[:60]}...")
-
-            # --- DEBUGGING DE CAPTCHA ---
-            print("[3/5] Intentando extraer Captcha...")
+            # --- RESOLUCIÓN DE CAPTCHA ---
+            print("[DEBUG] [3/5] Localizando texto del Captcha...")
             
-            # Extraemos todo el texto visible del frame para ver qué hay dentro
-            full_frame_text = target_frame.inner_text("body")
-            print("-" * 30)
-            print(f"[DEBUG TEXTO ENCONTRADO]:\n{full_frame_text}")
-            print("-" * 30)
-
-            # Intentamos el match con el patrón configurado
-            captcha_match = re.search(PNP_CAPTCHA_PATTERN, full_frame_text)
+            # Intentamos leer específicamente del contenedor de captcha
+            captcha_container = target_frame.locator(".captcha-container")
+            raw_text = ""
             
-            if not captcha_match:
-                # Si falla el regex, intentamos buscar por palabras clave
-                print("[WARN] El regex estricto falló. Buscando patrones alternativos...")
-                # Buscamos cualquier cosa que parezca una operación: "¿Cuánto es X + Y?"
-                alt_match = re.search(r'¿Cuánto es\s*(\d+)\s*([+\-*/])\s*(\d+)\s*\?', full_frame_text)
-                if alt_match:
-                    print(f"[DEBUG] Patrón alternativo encontrado: {alt_match.group(0)}")
-                    question = alt_match.group(0)
-                else:
-                    print("[ERROR] No se encontró texto que parezca una operación matemática.")
-                    page.screenshot(path=f"debug_captcha_fail_{normalized}.png")
-                    return {"cedula": normalized, "status": "Captcha no detectado"}
+            if captcha_container.count() > 0:
+                raw_text = captcha_container.inner_text()
+                print(f"[DEBUG] Texto leído de .captcha-container: '{raw_text.strip()}'")
             else:
-                question = captcha_match.group(1)
+                raw_text = target_frame.inner_text("body")
+                print(f"[DEBUG] .captcha-container no hallado, leyendo body: '{raw_text[:50]}...'")
 
-            solution = solve_pnp_captcha(question)
-            print(f"[DEBUG] Pregunta: '{question}' -> Solución calculada: {solution}")
+            # Buscamos la operación matemática
+            match = re.search(r'(\d+)\s*([+\-*/])\s*(\d+)', raw_text)
+            
+            if not match:
+                print(f"[ERROR] No se pudo encontrar una operación matemática en: '{raw_text}'")
+                return {"cedula": normalized, "status": "Error: Captcha no detectado"}
+            
+            # Extraemos los componentes para el cálculo
+            n1, op, n2 = match.group(1), match.group(2), match.group(3)
+            print(f"[DEBUG] Operación identificada: {n1} {op} {n2}")
+            
+            solution = solve_pnp_captcha(f"{n1} {op} {n2}")
+            print(f"[DEBUG] RESULTADO CALCULADO: {solution}")
 
-            # --- LLENADO Y ENVÍO ---
-            print("[4/5] Llenando campos...")
-            target_frame.fill('input[name="txtCedula"]', cedula_numerica)
-            target_frame.fill('input[name="txtCaptcha"]', solution)
+            # --- LLENADO DE CAMPOS ---
+            print(f"[DEBUG] [4/5] Llenando formulario...")
             
-            print("[5/5] Enviando formulario...")
-            target_frame.click("button:has-text('Buscar'), button[type='submit']")
+            # Campo Cédula (Solo números)
+            campo_id = target_frame.locator(f'input[name="{PNP_FORM_CEDULA_FIELD}"]')
+            print(f"[DEBUG] Escribiendo '{cedula_numerica}' en {PNP_FORM_CEDULA_FIELD}")
+            campo_id.fill(cedula_numerica)
             
-            # Espera de resultados
-            page.wait_for_timeout(6000)
+            # Campo Captcha (Resultado de la operación)
+            campo_cap = target_frame.locator(f'input[name="{PNP_FORM_CAPTCHA_FIELD}"]')
+            print(f"[DEBUG] Escribiendo '{solution}' en {PNP_FORM_CAPTCHA_FIELD}")
+            campo_cap.fill(solution)
             
-            # Captura final para validar éxito visualmente
-            page.screenshot(path=f"resultado_{normalized}.png")
+            # --- ENVÍO ---
+            print("[DEBUG] [5/5] Presionando botón Buscar...")
+            target_frame.locator("button[type='submit']").click()
             
-            # Intento de extracción de datos
-            result_box = target_frame.locator("div.alert, .card-body, table").first
-            if result_box.is_visible():
-                res_text = result_box.inner_text().strip()
-                print(f"[SUCCESS] Datos extraídos correctamente.")
-                return {"cedula": normalized, "fuente": "Sistemas PNP", "datos": res_text}
+            # Esperamos a ver el cambio
+            page.wait_for_timeout(5000)
+            page.screenshot(path=f"debug_resultado_{cedula_numerica}.png")
             
-            print("[WARN] Formulario enviado pero no se detectó caja de resultados.")
-            return {"cedula": normalized, "status": "Enviado - Sin respuesta visible"}
+            # Verificación de éxito
+            resultado = target_frame.locator(".form-container, .alert").first
+            if resultado.is_visible():
+                print(f"[SUCCESS] Datos encontrados para {normalized}")
+                return {"cedula": normalized, "fuente": "Sistemas PNP", "datos": resultado.inner_text().strip()}
+            
+            return {"cedula": normalized, "status": "Consulta enviada, esperando respuesta"}
 
         except Exception as e:
-            print(f"[CRITICAL ERROR]: {str(e)}")
-            return {"cedula": normalized, "status": f"Error: {type(e).__name__}"}
+            print(f"[CRITICAL ERROR] {str(e)}")
+            return {"cedula": normalized, "status": "Error en proceso"}
         finally:
             browser.close()
 
