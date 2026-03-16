@@ -127,20 +127,50 @@ def get_pnp_data(cedula):
             print(f"[DEBUG] Escribiendo solución '{solution}'...")
             input_captcha.fill(solution)
 
-            # --- ENVÍO ---
-            print("[DEBUG] [5/5] Enviando...")
+            # --- ENVÍO Y CAPTURA DE RESULTADOS ---
+            print("[DEBUG] [5/5] Enviando formulario...")
             target_frame.locator("button[type='submit'], button:has-text('Buscar')").click()
+            
+            # Esperamos a que la primera tarjeta (card) aparezca
+            print("[DEBUG] Esperando respuesta del servidor...")
+            # Buscamos el contenedor de la "tarjeta" de arriba
+            selector_tarjeta = ".card, .alert-success, .form-container"
+            try:
+                target_frame.wait_for_selector(selector_tarjeta, timeout=15000)
+            except:
+                print("[WARN] La tarjeta de resultados no apareció a tiempo.")
 
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(2000) # Breve pausa para renderizado
             page.screenshot(path=f"resultado_{cedula_numerica}.png")
 
-            # Verificación de datos
-            resultado = target_frame.locator(".form-container, .alert").first
-            if resultado.is_visible():
-                print(f"[SUCCESS] Datos obtenidos para {normalized}")
-                return {"cedula": normalized, "fuente": "Sistemas PNP", "datos": resultado.inner_text().strip()}
+            # --- EXTRACCIÓN DETALLADA DE LA PRIMERA TARJETA ---
+            # Localizamos todas las tarjetas y tomamos la primera (índice 0)
+            tarjetas = target_frame.locator(".card")
+            
+            if tarjetas.count() > 0:
+                primera_tarjeta = tarjetas.nth(0)
+                info_texto = primera_tarjeta.inner_text().strip()
+                
+                print("-" * 40)
+                print(f"[SUCCESS] DATOS ENCONTRADOS:\n{info_texto}")
+                print("-" * 40)
+                
+                # Intentamos estructurar los datos básicos para el CSV
+                return {
+                    "cedula": normalized,
+                    "fuente": "Sistemas PNP",
+                    "datos_completos": info_texto.replace("\n", " | "),
+                    "status": "Éxito"
+                }
+            
+            # Si no hay clase .card, intentamos con el contenedor general que usabas
+            resultado_general = target_frame.locator("body > div:nth-of-type(1) > div:nth-of-type(1)").first
+            if resultado_general.is_visible():
+                txt = resultado_general.inner_text().strip()
+                print(f"[DEBUG] Resultado general: {txt[:100]}...")
+                return {"cedula": normalized, "fuente": "Sistemas PNP", "datos_completos": txt, "status": "Éxito"}
 
-            return {"cedula": normalized, "status": "Enviado - Verifique imagen"}
+            return {"cedula": normalized, "status": "No se detectó la tarjeta de datos"}
 
         except Exception as e:
             print(f"[CRITICAL ERROR] {str(e)}")
