@@ -17,14 +17,39 @@ def normalize_cedula(cedula):
     cedula = str(cedula).strip().upper()
     return cedula if '-' in cedula else f"V-{cedula}"
 
+def parse_datos(datos_string):
+    # Extract fields using regex
+    primer_apellido = re.search(r'Primer Apellido:\s*([^|]+)', datos_string)
+    segundo_apellido = re.search(r'Segundo Apellido:\s*([^|]+)', datos_string)
+    nombres = re.search(r'Nombres:\s*([^|]+)', datos_string)
+    cedula = re.search(r'Cédula:\s*(\d+)', datos_string)
+    
+    p_ap = primer_apellido.group(1).strip() if primer_apellido else ""
+    s_ap = segundo_apellido.group(1).strip() if segundo_apellido else ""
+    nom = nombres.group(1).strip() if nombres else ""
+    ced = cedula.group(1).strip() if cedula else ""
+    
+    return {
+        "nombre y apellidos": f"{nom} {p_ap} {s_ap}".strip(),
+        "cedula": ced
+    }
+
 def save_to_csv(data_list, filename):
     if not data_list:
         return
-    headers = sorted(list(set().union(*(d.keys() for d in data_list))))
+    
+    # Filter only successful results
+    success_data = [d for d in data_list if d.get("status") == "Success"]
+    
     with open(filename, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
+        writer = csv.DictWriter(f, fieldnames=["numero correlativo", "nombre y apellidos", "cedula"])
         writer.writeheader()
-        writer.writerows(data_list)
+        for i, item in enumerate(success_data, 1):
+            writer.writerow({
+                "numero correlativo": i,
+                "nombre y apellidos": item.get("nombre y apellidos", ""),
+                "cedula": item.get("cedula", "")
+            })
     print(f"Data saved to '{filename}'")
 
 def solve_pnp_captcha(question):
@@ -78,9 +103,11 @@ def get_pnp_data(cedula):
 
             tarjetas = target_frame.locator(".card")
             if tarjetas.count() > 0:
+                datos_raw = tarjetas.nth(0).inner_text().strip().replace("\n", " | ")
+                parsed = parse_datos(datos_raw)
                 return {
-                    "cedula": normalized,
-                    "datos": tarjetas.nth(0).inner_text().strip().replace("\n", " | "),
+                    "nombre y apellidos": parsed["nombre y apellidos"],
+                    "cedula": parsed["cedula"],
                     "status": "Success"
                 }
             
