@@ -77,7 +77,7 @@ def get_pnp_data(cedula):
 
         try:
             page.goto(f"{PNP_BASE_URL}{PNP_GET_CAPTCHA_URL_PATH}", wait_until="load", timeout=60000)
-            page.wait_for_timeout(3000)
+            #page.wait_for_timeout(3000)
 
             target_frame = None
             for f in page.frames:
