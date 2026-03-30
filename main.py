@@ -126,37 +126,51 @@ def get_pnp_data(cedula):
         finally:
             browser.close()
 
+def limpiar(): os.system('clear')
 # --- Main ---
 
 if __name__ == "__main__":
-    print("1. Manual\n2. File")
-    input_type = input("Input (1/2): ")
+    limpiar()
+    while True:
+        print("Bienvenido")
+        print("\n1. Manual\n2. File\n3. Salir (o presionar enter)")
+        input_type = input("\nInput (1/2/3): ")
+        print("")
     
-    cedulas = []
-    if input_type == '1':
-        while True:
-            c = input("Cedula (Enter to finish): ").strip()
-            if not c: break
-            cedulas.append(c)
-    else:
-        fname = input("File path: ")
-        try:
-            with open(fname, 'r', encoding='utf-8') as f:
-                cedulas = [line.strip() for line in f if line.strip()]
-        except Exception as e: print(f"File error: {e}")
+        cedulas = []
 
-    results = []
-    start_total = time.time()
-    for c in cedulas:
-        print(f"Processing: {c}")
-        start_id = time.time()
-        res = get_pnp_data(c)
-        results.append(res)
-        end_id = time.time()
-        print(f"Result for {c}: {res.get('status')} (Time: {end_id - start_id:.2f}s)")
+        if input_type == '1':
+            while True:
+                c = input("Cedula (Enter to finish): ").strip()
+                if not c: break
+                cedulas.append(c)
+        elif input_type == '2':
+            fname = input("File path: ")
+            try:
+                with open(fname, 'r', encoding='utf-8') as f:
+                    cedulas = [line.strip() for line in f if line.strip()]
+            except Exception as e: print(f"\nFile error: {e}")
+        elif input_type == '3' or not input_type:
+            print("\nGracias por usar el programa")
+            break
+        else:
+            print("\nError, intente de nuevo")
+
+        results = []
+        start_total = time.time()
+        for c in cedulas:
+            print(f"\nProcessing: {c}")
+            start_id = time.time()
+            res = get_pnp_data(c)
+            results.append(res)
+            end_id = time.time()
+            print(f"Esta cedula {c} le pertence a {res.get('nombre y apellidos')}")
+            print(f"Result for {c}: {res.get('status')} (Time: {end_id - start_id:.2f}s)")
     
-    end_total = time.time()
-    print(f"Total time: {end_total - start_total:.2f} seconds")
+        end_total = time.time()
+        print(f"\nTotal time: {end_total - start_total:.2f} seconds\n")
 
-    save_to_csv(results, OUTPUT_CSV_FILE)
-    save_to_json(results, OUTPUT_JSON_FILE)
+        save_to_csv(results, OUTPUT_CSV_FILE)
+        save_to_json(results, OUTPUT_JSON_FILE)
+        input("\nEnter para continuar...")
+        limpiar()
